@@ -13,5 +13,9 @@ conda env create -f environment.yml
 conda activate Spectral_Mesh_Processing
 ```
 
-<h2 align="center">Basic Setup</h2>
+<h2 align="center">Current Functionality</h2>
+1. Uniform and non-uniform (cotan Laplace-Beltrami operator) for mean curvature
+2. Gauss Curvature 
+
+
 

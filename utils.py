@@ -54,7 +54,7 @@ def uniform_laplace(mesh):
     L = sparse.csr_matrix(L)
     return L
 
-def mean_curvature(mesh,laplaceFunc=uniform_laplace):
+def mean_curvature(mesh,laplaceFunc="uniform"):
     """
     Calculates the mean curvature H of the mesh— ∆x/2 
     ...
@@ -71,16 +71,17 @@ def mean_curvature(mesh,laplaceFunc=uniform_laplace):
     vertices = mesh.vertices
     normals = mesh.vertex_normals
 
-    if laplaceFunc == uniform_laplace:
-        laplace_on_coords = laplaceFunc(mesh)@vertices
+    if laplaceFunc == "uniform":
+        laplace_on_coords = uniform_laplace(mesh)@vertices
+        signs = np.sign(np.sum(normals*laplace_on_coords, axis = 1))*(-1)
+        H = 0.5*np.sum(laplace_on_coords **2,axis=1)
+        H = H*signs
+
     else:
-        M_inv, C = laplaceFunc(mesh)
+        M_inv, C = laplace_beltrami_operator(mesh)
         laplace_on_coords = M_inv@C@vertices
-    
-    signs = np.sign(np.sum(normals*laplace_on_coords, axis = 1))*(-1)
-    H = 0.5*np.sum(laplace_on_coords **2,axis=1)
-    H = H*signs
-    
+        H = 0.5*np.sum(laplace_on_coords **2,axis=1)
+
     return H
     
 def gauss_curvature(mesh):
@@ -125,7 +126,7 @@ def gauss_curvature(mesh):
     return gaussCurvature
 
 
-def laplace_beltrami_operator(mesh):
+def laplace_beltrami_operator(mesh,boundary_condition='dirichlet',poisson=False):
     """
     Calculates the laplacian beltrami operator using cotan weights
     Parameters
@@ -138,77 +139,39 @@ def laplace_beltrami_operator(mesh):
     M_inv: (n,n) float, mass matrix with diagonal elements set to 1/2A
     """
     vertices = mesh.vertices
-    num_vert = len(vertices)
-    neighbors = [mesh.vertex_neighbors[i] for i in range(len(vertices))]
-    Minv = sparse.lil_matrix((num_vert, num_vert))
-    C = sparse.lil_matrix((num_vert, num_vert))
-    for i in range(num_vert):
-        print(f"for vertex {i}")
-        # indices of neighbouring vertices
-        vertex_neigh = np.array(neighbors[i])
-        # number of neighbouring vertices   
-        val = len(vertex_neigh)
-        dot_products_row1 = np.array([np.sum((vertices[i,:] - vertices[vertex_neigh[(i+1)%val],:])*
-                                     (vertices[vertex_neigh[i],:] - vertices[vertex_neigh[(i+1)%val],:]))
-                                 for i in range(val)])#dot product gives (ab)cosC for each face
-            
-        magnitudes_row1 = np.array([#magnitudes of dot products (i.e the ab for each face)
-            (np.linalg.norm(vertices[i,:] - vertices[vertex_neigh[(i+1)%val],:])*
-                        np.linalg.norm(vertices[vertex_neigh[i],:] - vertices[vertex_neigh[(i+1)%val],:]))
-                                for i in range(val)])
-        
-        
-        dot_products_row2 = np.array([np.sum((vertices[i,:] - vertices[vertex_neigh[(i-1)%val],:])*
-                                (vertices[vertex_neigh[i],:] - vertices[vertex_neigh[(i-1)%val],:]))
-                                    for i in range(val)])#dot product gives (ab)cosC for each face
-        
-        
-        magnitudes_row2 = np.array([#magnitudes of dot products (i.e the ab for each face)
-            (np.linalg.norm(vertices[i,:] - vertices[vertex_neigh[(i-1)%val],:])*
-                    np.linalg.norm(vertices[vertex_neigh[i],:] - vertices[vertex_neigh[(i-1)%val],:]))
-                                for i in range(val)])
-        
-        cosines = np.vstack([dot_products_row1/magnitudes_row1,
-                                dot_products_row2/magnitudes_row2])
-        #print(cosines.shape)
-        
-        
-        cosines = np.clip(cosines, -1,1)
-        
-        sines = np.clip((1 - cosines**2)**0.5, 0, 1)
-        
-        
-        cotans = cosines/sines
-        
-        #####################work out area normalisation#####################
-        
-        
-        dot_products = np.array([np.sum((vertices[i,:] - vertices[vertex_neigh[i],:])*
-                                        (vertices[i,:] - vertices[vertex_neigh[(i+1)%val],:]))
-                            for i in range(val)])#dot product gives (ab)cosC for each face
-        
-        magnitudes = np.array([#magnitudes of dot products (i.e the ab for each face)
-            (np.linalg.norm(vertices[i,:] - vertices[vertex_neigh[i],:])*
-                np.linalg.norm(vertices[i,:] - vertices[vertex_neigh[(i+1)%val],:])) 
-                            for i in range(val)])
-        
-        cosines = np.clip(dot_products/magnitudes, -1,1)
-        
-        sines = np.clip((1 - cosines**2)**0.5, 0, 1)
-        
-        total_area = np.sum(0.5*magnitudes*sines)#because area of triangle is (1/2)absinC
+    neighbours = mesh.vertex_neighbors
+    num_vert = vertices.shape[0]
+    print(f"num_vert: {num_vert}")
+    faces = mesh.faces
 
-        C[i,vertex_neigh[i]] = np.sum(cotans, axis = 0)
-        C[i,i] = -1*np.sum(cotans)# -sum of all cot_alpha_ii + cot_beta_ii
-                                                        #for each i
-        
-        M[i,i] = (2*total_area/3)
-        Minv[i,i] = 1/(2*total_area/3)
-       
-    M = sparse.csr_matrix(M)
-    Minv = sparse.csr_matrix(Minv)
-    C = sparse.csr_matrix(C)
-    L = Minv@C
-    
-    return Minv,C
+    C = sparse.lil_matrix((num_vert,num_vert))
+    M_inv = sparse.lil_matrix((num_vert,num_vert))
+    # find cotan weights matrix
+    for i in range(num_vert):
+        neighbours_i = neighbours[i]
+        faces_i = np.where(faces == i)[0]
+        areas = 0
+        for j in range(len(neighbours_i)):
+            cot_angles = 0
+            neigh = neighbours_i[j]
+            for f in faces_i:
+                if neighbours_i[j] in faces[f]:
+                    k = faces[f][np.where(np.logical_and(faces[f] != i, faces[f] != neigh))[0]]
+                    v1 = vertices[i]
+                    v2 = vertices[neigh]
+                    v3 = vertices[k].reshape(-1)
+
+                    areas += np.linalg.norm(np.cross(v1-v3,v3-v2))/2.0
+                    cot_angles += np.dot(v3-v1,v3-v2)/np.linalg.norm(np.cross(v3-v1,v3-v2))
+            C[i,neigh] = cot_angles
+        M_inv[i,i] = 3/(areas)
+        C[i,i] = -np.sum(C[i,:])  
+    return M_inv, C
+
+
+
+
+
+
+      
     

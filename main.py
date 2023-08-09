@@ -15,7 +15,7 @@ fp = 'meshes/curvatures/plane.obj'
 
 tm1 = trimesh.load(fp)
 v_P = tm1.vertices
-H = mean_curvature(tm1,laplaceFunc=laplace_beltrami_operator)
+H = mean_curvature(tm1,laplaceFunc="non-uniform")
 print('mean curvature min:',min(H),', max:',max(H))
 
 Hconst = np.max(np.abs(H))
